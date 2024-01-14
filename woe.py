@@ -47,6 +47,7 @@ class ConvertCategoricalFeatures():
     def __init__(self,binarytarget,CategoricalFeatures):
         self.target = binarytarget
         self.Model = {}
+        self.IV = {}
         self.Features = CategoricalFeatures
     def fit(self,traindf):
         NPositive=traindf[traindf[self.target]==1].shape[0]
@@ -69,11 +70,15 @@ class ConvertCategoricalFeatures():
             results["DB"]=results["Negative"]*1./NNegative
             #WOE                                                                                                                                             
             results["WOE"]=np.log(results["DG"]/results["DB"])
+            #IV
+            results["IV"]=(results["DG"]-results["DB"])*results["WOE"]
             results.loc[results.Count <= 10, 'WOE'] = 0
             results.loc[results.CountPositive <= 1, 'WOE'] = results["WOE"].min()
             results.loc[results.Count <= 10, 'WOE'] = 0
-            results = results[[feature,'WOE']]
+            results = results[[feature,'WOE','IV']]
             self.Model[feature] = dict(zip(results[feature], results.WOE))
+            self.IV[feature] = results.IV.sum()
+            
     def train(self,traindf):
         self.fit(traindf)
     def transform(self,testdf):
@@ -93,6 +98,7 @@ class ConvertContinuousFeatures():
     def __init__(self,binarytarget,ContinuousFeatures,NBins):
         self.target = binarytarget
         self.Model = {}
+        self.IV = {}
         self.Features = ContinuousFeatures
         self.NBins = NBins
         self.BinModel = {}
@@ -103,18 +109,10 @@ class ConvertContinuousFeatures():
         NNegative=traindf[traindf[self.target]==0].shape[0]
         for feature in self.Features:
             tmpdf = traindf[[feature,self.target]].copy(deep=True)
-            List = sorted(list(filter(lambda x:not np.isnan(x),tmpdf[feature].values)))
-            Len = len(List)
-            BinsLim = [-np.inf]
-            for omega in range(1,self.NBins):
-                Value = List[int(omega * Len / self.NBins)]
-                if Value not in BinsLim:
-                    BinsLim.append( Value )
-            BinsLim.append(np.inf)
-            self.BinModel[feature] = BinsLim
-            tmpdf["bin"] = pd.cut(tmpdf[feature], self.BinModel[feature], labels=range(1,len(self.BinModel[feature])))
-            tmpdf["bin"] = tmpdf["bin"].cat.add_categories([-1])
-            tmpdf["bin"] = tmpdf["bin"].fillna(-1) 
+            tmpdf["bin"], retbins = pd.qcut(tmpdf[feature], self.NBins, retbins=True, duplicates='drop', labels=False)
+            
+            self.BinModel[feature] = np.concatenate(([-np.inf], retbins[1:-1], [np.inf]))
+            tmpdf["bin"] = tmpdf["bin"].fillna(-1)
             results = tmpdf[["bin",self.target]].groupby(["bin"]).agg(['sum','count'])
             results = results.reset_index()
             results.columns=["bin","Positive","Count"]
@@ -129,16 +127,18 @@ class ConvertContinuousFeatures():
             results["DB"]=results["Negative"]*1./NNegative
             #WOE                                                                                                                                             
             results["WOE"]=np.log(results["DG"]/results["DB"])
+            #IV
+            results["IV"]=(results["DG"]-results["DB"])*results["WOE"]
             results.loc[results.Count <= 10, 'WOE'] = 0
             results.loc[results.CountPositive <= 1, 'WOE'] = results["WOE"].min()
             results.loc[results.Count <= 10, 'WOE'] = 0
-            results = results[["bin",'WOE']]
+            results = results[["bin",'WOE','IV']]
             self.Model[feature] = dict(zip(results["bin"], results.WOE))
+            self.IV[feature] = results.IV.sum()
     def transform(self,testdf):
         tmpdf = testdf.copy(deep=True)
         for feature in self.Features:
-            tmpdf[feature] = pd.cut(tmpdf[feature], self.BinModel[feature], labels=range(1,len(self.BinModel[feature])))
-            tmpdf[feature] = tmpdf[feature].cat.add_categories([-1])
+            tmpdf[feature] = pd.cut(tmpdf[feature], self.BinModel[feature], labels=False)
             tmpdf[feature] = tmpdf[feature].fillna(-1) 
         return tmpdf.replace(self.Model)
-        #return tmpdf.dtypes
+
